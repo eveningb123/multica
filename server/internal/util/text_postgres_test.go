@@ -80,6 +80,46 @@ func TestSanitizeTextForPostgresToValidUTF8IsNotEnough(t *testing.T) {
 }
 
 func TestSanitizeJSONForPostgres(t *testing.T) {
+	t.Run("preserves distinct keys that collide after sanitization", func(t *testing.T) {
+		in := map[string]any{
+			"tool":     "unchanged",
+			"tool\x00": "contained a NUL",
+		}
+
+		out, ok := SanitizeJSONForPostgres(in).(map[string]any)
+		if !ok {
+			t.Fatalf("SanitizeJSONForPostgres returned %T, want map[string]any", SanitizeJSONForPostgres(in))
+		}
+		if len(out) != 2 {
+			t.Fatalf("sanitized key collision dropped an entry: got %v", out)
+		}
+		if got := out["tool"]; got != "unchanged" {
+			t.Fatalf("out[tool] = %v, want unchanged value", got)
+		}
+		if got := out["tool#2"]; got != "contained a NUL" {
+			t.Fatalf("out[tool#2] = %v, want sanitized collision value", got)
+		}
+	})
+
+	t.Run("does not overwrite an existing collision suffix", func(t *testing.T) {
+		in := map[string]any{
+			"tool":     "unchanged",
+			"tool#2":   "existing suffix",
+			"tool\x00": "contained a NUL",
+		}
+
+		out := SanitizeJSONForPostgres(in).(map[string]any)
+		if len(out) != 3 {
+			t.Fatalf("sanitized key collision dropped an entry: got %v", out)
+		}
+		if got := out["tool#2"]; got != "existing suffix" {
+			t.Fatalf("out[tool#2] = %v, want existing suffix value", got)
+		}
+		if got := out["tool#3"]; got != "contained a NUL" {
+			t.Fatalf("out[tool#3] = %v, want sanitized collision value", got)
+		}
+	})
+
 	t.Run("cleans strings at every depth, keys included", func(t *testing.T) {
 		in := map[string]any{
 			"cmd\x00": "cat\x00 binary",

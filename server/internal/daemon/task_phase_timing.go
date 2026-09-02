@@ -12,15 +12,15 @@ import (
 type taskPhase string
 
 const (
-	taskPhaseClaimed            taskPhase = "claimed"
-	taskPhasePrepareStarted     taskPhase = "prepare_started"
-	taskPhaseSkillsReady        taskPhase = "skills_ready"
-	taskPhaseEnvironmentReady   taskPhase = "environment_ready"
-	taskPhaseRuntimeStarted     taskPhase = "runtime_started"
-	taskPhaseFirstVisibleOutput taskPhase = "first_visible_output"
-	taskPhaseFirstToolUse       taskPhase = "first_tool_use"
-	taskPhaseTurnCompleted      taskPhase = "turn_completed"
-	taskPhaseFinished           taskPhase = "finished"
+	taskPhaseClaimed             taskPhase = "claimed"
+	taskPhasePrepareStarted      taskPhase = "prepare_started"
+	taskPhaseSkillsReady         taskPhase = "skills_ready"
+	taskPhaseEnvironmentReady    taskPhase = "environment_ready"
+	taskPhaseRuntimeStarted      taskPhase = "runtime_started"
+	taskPhaseFirstOutputReceived taskPhase = "first_output_received"
+	taskPhaseFirstToolUse        taskPhase = "first_tool_use"
+	taskPhaseTurnCompleted       taskPhase = "turn_completed"
+	taskPhaseFinished            taskPhase = "finished"
 )
 
 type taskPhaseSample struct {
@@ -56,8 +56,10 @@ func newTaskPhaseRecorder(logger *slog.Logger, now func() time.Time) *taskPhaseR
 	}
 }
 
-// Mark records and logs a phase only once. A duplicate mark returns a zero
-// sample and does not consume the injected clock.
+// Mark records and logs a phase only once. PhaseElapsed is the time since the
+// previous recorded phase, not the duration of the named phase itself; skipped
+// phases therefore widen the next recorded interval. A duplicate mark returns
+// a zero sample and does not consume the injected clock.
 func (r *taskPhaseRecorder) Mark(phase taskPhase) taskPhaseSample {
 	if r == nil {
 		return taskPhaseSample{}
@@ -98,7 +100,7 @@ func taskPhaseRecorderFromContext(ctx context.Context) *taskPhaseRecorder {
 	return recorder
 }
 
-func isTaskVisibleOutput(msg agent.Message) bool {
+func isTaskOutputReceived(msg agent.Message) bool {
 	switch msg.Type {
 	case agent.MessageText, agent.MessageThinking:
 		return msg.Content != ""

@@ -61,7 +61,7 @@ func TestTaskPhaseRecorderLogsEachPhaseOnlyOnce(t *testing.T) {
 	}
 }
 
-func TestTaskPhaseRecorderClassifiesVisibleOutput(t *testing.T) {
+func TestTaskPhaseRecorderClassifiesOutputReceived(t *testing.T) {
 	cases := []struct {
 		name string
 		msg  agent.Message
@@ -75,8 +75,8 @@ func TestTaskPhaseRecorderClassifiesVisibleOutput(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isTaskVisibleOutput(tc.msg); got != tc.want {
-				t.Fatalf("isTaskVisibleOutput(%#v) = %t, want %t", tc.msg, got, tc.want)
+			if got := isTaskOutputReceived(tc.msg); got != tc.want {
+				t.Fatalf("isTaskOutputReceived(%#v) = %t, want %t", tc.msg, got, tc.want)
 			}
 		})
 	}
@@ -102,7 +102,7 @@ func TestTaskPhaseRecorderClassifiesToolUse(t *testing.T) {
 	}
 }
 
-func TestTaskPhaseRecorderRecordsDrainLifecycleInOrder(t *testing.T) {
+func TestTaskPhaseRecorderRecordsReceivedAttemptPhasesInOrder(t *testing.T) {
 	capture := newTaskPhaseCaptureHandler()
 	recorder := newTaskPhaseRecorder(slog.New(capture), time.Now)
 	ctx := withTaskPhaseRecorder(context.Background(), recorder)
@@ -126,9 +126,8 @@ func TestTaskPhaseRecorderRecordsDrainLifecycleInOrder(t *testing.T) {
 
 	want := []taskPhase{
 		taskPhaseRuntimeStarted,
-		taskPhaseFirstVisibleOutput,
+		taskPhaseFirstOutputReceived,
 		taskPhaseFirstToolUse,
-		taskPhaseTurnCompleted,
 	}
 	if got := capture.phasesSnapshot(); !slices.Equal(got, want) {
 		t.Fatalf("phase order = %v, want %v", got, want)

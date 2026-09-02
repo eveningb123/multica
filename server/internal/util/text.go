@@ -140,6 +140,7 @@ func sanitizePostgresJSONMapKeys(values map[string]any) map[string]string {
 
 	mapped := make(map[string]string, len(keys))
 	used := make(map[string]struct{}, len(keys))
+	nextSuffix := make(map[string]int)
 	changed := make([]string, 0, len(keys))
 	for _, key := range keys {
 		candidate := SanitizeTextForPostgres(key)
@@ -154,11 +155,19 @@ func sanitizePostgresJSONMapKeys(values map[string]any) map[string]string {
 	for _, key := range changed {
 		base := SanitizeTextForPostgres(key)
 		candidate := base
-		for suffix := 2; ; suffix++ {
-			if _, exists := used[candidate]; !exists {
-				break
+		if _, exists := used[candidate]; exists {
+			suffix := nextSuffix[base]
+			if suffix == 0 {
+				suffix = 2
 			}
-			candidate = fmt.Sprintf("%s#%d", base, suffix)
+			for {
+				candidate = fmt.Sprintf("%s#%d", base, suffix)
+				if _, exists := used[candidate]; !exists {
+					nextSuffix[base] = suffix + 1
+					break
+				}
+				suffix++
+			}
 		}
 		mapped[key] = candidate
 		used[candidate] = struct{}{}

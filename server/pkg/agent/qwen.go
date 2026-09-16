@@ -167,7 +167,7 @@ func (b *qwenBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		}
 
 		started := time.Now()
-		state := qwenStreamState{model: opts.Model, usage: make(map[string]TokenUsage)}
+		state := qwenStreamState{model: opts.Model, usage: make(map[string]TokenUsage), resumed: opts.ResumeSessionID != ""}
 		go func() {
 			<-runCtx.Done()
 			// Closing stdin releases a prompt write still blocked on a full pipe
@@ -278,6 +278,7 @@ type qwenStreamState struct {
 	seenUsageMessageIDs                                                 map[string]struct{}
 	anonymousUsage                                                      map[string]TokenUsage
 	hasResultUsage                                                      bool
+	resumed                                                             bool
 	eventCount, invalidEventCount, assistantEventCount, toolUseCount    int
 	unreadableAssistantCount                                            int
 }
@@ -315,7 +316,13 @@ func handleQwenEvent(event qwenStreamEvent, ch chan<- Message, state *qwenStream
 		} else {
 			state.finalResultText = event.Result
 		}
-		if usage := qwenResultUsage(event.Usage, state.model); len(usage) > 0 {
+		// Qwen restores historical telemetry on resume, so result.usage is a
+		// session total, not this invocation's usage. Only fresh runs can use
+		// it. Resumed runs retain the deduplicated assistant-message totals;
+		// these are best effort and may omit internal calls absent from the
+		// stream. Without a run-scoped total or a baseline, the cumulative
+		// result cannot safely fill those gaps (including a result-only run).
+		if usage := qwenResultUsage(event.Usage, state.model); !state.resumed && len(usage) > 0 {
 			state.usage = usage
 			state.hasResultUsage = true
 		}

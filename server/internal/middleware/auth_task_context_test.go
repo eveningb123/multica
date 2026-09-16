@@ -47,7 +47,7 @@ func TestAuthTaskTokenRejectsConflictingExecutionContext(t *testing.T) {
 				req.Header.Set(field, "55555555-5555-4555-8555-555555555555")
 			}
 			called := false
-			h := Auth(db.New(taskContextDB{token: token}), nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := Auth(db.New(taskContextDB{token: token}), nil, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				called = true
 				if r.Header.Get("X-Task-ID") != "11111111-1111-4111-8111-111111111111" {
 					t.Error("missing authoritative task identity")

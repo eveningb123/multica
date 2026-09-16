@@ -4405,6 +4405,19 @@ func TestEnsureRepoReadyReportsSyncFailure(t *testing.T) {
 	}
 }
 
+// repoRefreshWaitContext reports when ensureRepoReady reaches the cancellable
+// lock wait, after recording whether the repo was cached on entry.
+type repoRefreshWaitContext struct {
+	context.Context
+	once    sync.Once
+	waiting chan<- struct{}
+}
+
+func (c *repoRefreshWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { c.waiting <- struct{}{} })
+	return c.Context.Done()
+}
+
 func TestEnsureRepoReadyConcurrentMissRefreshesOnce(t *testing.T) {
 	t.Parallel()
 
@@ -4422,18 +4435,46 @@ func TestEnsureRepoReadyConcurrentMissRefreshesOnce(t *testing.T) {
 			ReposVersion: "v2",
 		})
 	})
-	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
+	ws := newWorkspaceState("ws-1", nil, "", nil, nil)
+	d.workspaces["ws-1"] = ws
 
+	// Keep the cache cold until every caller has recorded a miss and reached
+	// the lock. Merely starting goroutines also permits late warm-cache calls,
+	// which intentionally refresh settings again.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := ws.repoRefreshMu.Lock(ctx); err != nil {
+		t.Fatal(err)
+	}
+	unlock := sync.OnceFunc(ws.repoRefreshMu.Unlock)
 	const concurrency = 8
+	waiting := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
+	defer func() {
+		cancel()
+		unlock()
+		wg.Wait()
+	}()
 	errCh := make(chan error, concurrency)
 	for range concurrency {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- d.ensureRepoReady(context.Background(), "ws-1", sourceRepo)
+			waitCtx := &repoRefreshWaitContext{Context: ctx, waiting: waiting}
+			errCh <- d.ensureRepoReady(waitCtx, "ws-1", sourceRepo)
 		}()
 	}
+	for range concurrency {
+		select {
+		case <-waiting:
+		case <-ctx.Done():
+			t.Fatal("ensureRepoReady callers did not all reach the cold-cache lock wait")
+		}
+	}
+	if got := refreshCalls.Load(); got != 0 {
+		t.Fatalf("expected no refresh before releasing cold-cache callers, got %d", got)
+	}
+	unlock()
 	wg.Wait()
 	close(errCh)
 

@@ -85,6 +85,11 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$QWEN_MODE" in
+  usage-resume)
+    printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-qwen-1","model":"qwen-test"}'
+    printf '%s\n' '{"type":"assistant","session_id":"sess-qwen-1","message":{"id":"current-message","model":"qwen-test","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":100,"output_tokens":10}}}'
+    printf '%s\n' '{"type":"result","subtype":"success","session_id":"sess-qwen-1","result":"done","usage":{"input_tokens":1100,"output_tokens":110}}'
+    ;;
   usage-fallback)
     printf '%s\n' '{"type":"assistant","message":{"id":"message-1","model":"qwen-test","content":[{"type":"text","text":"first"}],"usage":{"input_tokens":100,"output_tokens":50}}}'
     printf '%s\n' '{"type":"assistant","message":{"id":"message-2","model":"qwen-test","content":[{"type":"text","text":"second"}],"usage":{"input_tokens":200,"output_tokens":20}}}'

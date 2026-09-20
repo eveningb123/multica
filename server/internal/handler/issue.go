@@ -2667,13 +2667,16 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
-	effectiveRuntimeID, err := h.TaskService.EffectiveRuntimeForUser(r.Context(), agent, requesterUUID)
+	readinessAgent, err := h.TaskService.AgentForRuntimeReadiness(r.Context(), agent, requesterUUID, pgtype.UUID{})
 	if err != nil {
-		writeAgentUnavailable(w, err.Error(), dispatch.ReasonInvocationNotAllowed)
+		reason := dispatch.ReasonInvocationNotAllowed
+		if errors.Is(err, service.ErrTaskRuntimeAccessDenied) {
+			reason = dispatch.ReasonRuntimeAccessDenied
+		}
+		writeAgentUnavailable(w, err.Error(), reason)
 		return
 	}
-	readinessAgent := agent
-	readinessAgent.RuntimeID = effectiveRuntimeID
+	effectiveRuntimeID := readinessAgent.RuntimeID
 
 	// Quick-create needs the agent to run NOW, so any non-ready verdict refuses
 	// — but with the verdict's own code, so "CLI cannot run" no longer arrives

@@ -50,6 +50,14 @@ interface IntegrationEntry {
   state: ConnectionState;
 }
 
+// The IM channels soft-revoke: the row survives with status 'revoked', so a row
+// count never falls back to zero and would report a torn-down bot as connected
+// forever. GitHub and VCS hard-delete instead, so their count-based reads below
+// are correct and deliberately left as they are (#8496).
+const hasActiveInstallation = (data: {
+  installations?: { status: string }[];
+}) => data.installations?.some((inst) => inst.status === "active") ?? false;
+
 export function IntegrationsTab() {
   const { t } = useT("settings");
   const navigation = useNavigation();
@@ -77,27 +85,27 @@ export function IntegrationsTab() {
   const lark = useQuery({
     ...larkInstallationsOptions(wsId),
     enabled: canView,
-    select: (data) => (data.installations?.length ?? 0) > 0,
+    select: hasActiveInstallation,
   });
   const slack = useQuery({
     ...slackInstallationsOptions(wsId),
     enabled: canView,
-    select: (data) => (data.installations?.length ?? 0) > 0,
+    select: hasActiveInstallation,
   });
   const dingtalk = useQuery({
     ...dingtalkInstallationsOptions(wsId),
     enabled: canView,
-    select: (data) => (data.installations?.length ?? 0) > 0,
+    select: hasActiveInstallation,
   });
   const wecom = useQuery({
     ...wecomInstallationsOptions(wsId),
     enabled: canView,
-    select: (data) => (data.installations?.length ?? 0) > 0,
+    select: hasActiveInstallation,
   });
   const telegram = useQuery({
     ...telegramInstallationsOptions(wsId),
     enabled: canView,
-    select: (data) => (data.installations?.length ?? 0) > 0,
+    select: hasActiveInstallation,
   });
   const vcs = useQuery({
     ...vcsConnectionsOptions(wsId),

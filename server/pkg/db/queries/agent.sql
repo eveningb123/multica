@@ -257,6 +257,18 @@ WHERE runtime_id = $1 AND archived_at IS NULL AND kind = 'user'
 ORDER BY name ASC
 FOR UPDATE;
 
+-- name: ListUserAgentIDsByRuntime :many
+-- Non-locking companion to ListUserAgentsByRuntimeForUpdate, for callers that
+-- must reason about retention GC without taking the teardown's locks.
+--
+-- Archived rows are included deliberately, and that is the whole point: an
+-- archived agent can still own a non-terminal task, and gcRuntime counts those
+-- before it will delete a runtime. A read that filtered them would report a
+-- runtime as reclaimable when the sweeper is going to skip it.
+SELECT id FROM agent
+WHERE runtime_id = $1 AND kind = 'user'
+ORDER BY id;
+
 -- name: ListUserAgentsByRuntimeForUpdate :many
 -- Locks active AND archived user agents before a runtime teardown. Locking only
 -- the active snapshot leaves a restore race: an archived row can become active
@@ -771,7 +783,16 @@ WHERE id = (
           FROM agent a
           JOIN agent_runtime r ON r.id = atq.runtime_id
           WHERE a.id = atq.agent_id
-            AND task_runtime_allowed(atq.agent_id, atq.runtime_id, atq.runtime_routing)
+            AND a.workspace_id = r.workspace_id
+            AND a.archived_at IS NULL
+            -- Legacy queued mismatches reach the handler for explicit settlement.
+            -- Frozen routes retain live execution-user authorization.
+            AND (
+                (atq.runtime_routing IS NULL AND a.runtime_id = atq.runtime_id
+                 AND r.visibility IN ('public', 'private'))
+                OR (atq.runtime_routing IS NOT NULL
+                    AND task_runtime_allowed(atq.agent_id, atq.runtime_id, atq.runtime_routing))
+            )
             AND r.status = 'online'
             AND COALESCE(r.last_seen_at, r.updated_at) >=
                 now() - make_interval(secs => @runtime_stale_secs::double precision)
@@ -875,7 +896,8 @@ WHERE id = (
       AND atq.dispatched_at < now() - make_interval(secs => @claim_recovery_secs::double precision)
       AND (atq.prepare_lease_expires_at IS NULL OR atq.prepare_lease_expires_at < now())
       AND EXISTS (
-          -- Keep this authorization fence in sync with ClaimAgentTask.
+          -- Keep the dispatched-reclaim owner fence intentionally stricter
+          -- than the queued claim carve-out below.
           SELECT 1
           FROM agent a
           JOIN agent_runtime r ON r.id = atq.runtime_id
@@ -910,7 +932,8 @@ WHERE id IN (
       AND atq.dispatched_at < now() - make_interval(secs => @claim_recovery_secs::double precision)
       AND (atq.prepare_lease_expires_at IS NULL OR atq.prepare_lease_expires_at < now())
       AND EXISTS (
-          -- Keep this authorization fence in sync with ClaimAgentTask.
+          -- Keep the dispatched-reclaim owner fence intentionally stricter
+          -- than the queued claim carve-out below.
           SELECT 1
           FROM agent a
           JOIN agent_runtime r ON r.id = atq.runtime_id
@@ -2276,7 +2299,16 @@ WHERE atq.runtime_id = $1
       FROM agent a
       JOIN agent_runtime r ON r.id = atq.runtime_id
       WHERE a.id = atq.agent_id
-        AND task_runtime_allowed(atq.agent_id, atq.runtime_id, atq.runtime_routing)
+        AND a.workspace_id = r.workspace_id
+        AND a.archived_at IS NULL
+        -- Legacy queued mismatches reach the handler for explicit settlement.
+        -- Frozen routes retain live execution-user authorization.
+        AND (
+            (atq.runtime_routing IS NULL AND a.runtime_id = atq.runtime_id
+             AND r.visibility IN ('public', 'private'))
+            OR (atq.runtime_routing IS NOT NULL
+                AND task_runtime_allowed(atq.agent_id, atq.runtime_id, atq.runtime_routing))
+        )
   )
 ORDER BY atq.priority DESC, atq.created_at ASC;
 
@@ -2392,7 +2424,16 @@ WHERE atq.runtime_id = ANY(@runtime_ids::uuid[])
       FROM agent a
       JOIN agent_runtime r ON r.id = atq.runtime_id
       WHERE a.id = atq.agent_id
-        AND task_runtime_allowed(atq.agent_id, atq.runtime_id, atq.runtime_routing)
+        AND a.workspace_id = r.workspace_id
+        AND a.archived_at IS NULL
+        -- Legacy queued mismatches reach the handler for explicit settlement.
+        -- Frozen routes retain live execution-user authorization.
+        AND (
+            (atq.runtime_routing IS NULL AND a.runtime_id = atq.runtime_id
+             AND r.visibility IN ('public', 'private'))
+            OR (atq.runtime_routing IS NOT NULL
+                AND task_runtime_allowed(atq.agent_id, atq.runtime_id, atq.runtime_routing))
+        )
   )
 ORDER BY atq.priority DESC, atq.created_at ASC;
 

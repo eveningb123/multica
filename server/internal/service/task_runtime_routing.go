@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/attribution"
+	"github.com/multica-ai/multica/server/internal/dispatch"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -32,6 +33,7 @@ type RuntimeRoute struct {
 
 var ErrTaskRuntimeUnavailable = errors.New("selected task runtime is unavailable or not authorized")
 var ErrTaskRuntimeOffline = fmt.Errorf("%w: selected personal runtime is offline", ErrTaskRuntimeUnavailable)
+var ErrTaskRuntimeAccessDenied = fmt.Errorf("%w: agent owner does not match private runtime owner", ErrTaskRuntimeUnavailable)
 
 // ParseRuntimeRouting distinguishes old tasks from invalid modern evidence.
 // Individual routes are checked when selected so an unrelated deleted machine
@@ -132,6 +134,15 @@ func (s *TaskService) resolveTaskRuntime(ctx context.Context, q *db.Queries, age
 		return taskRuntimeSelection{}, fmt.Errorf("check task runtime: %w", err)
 	}
 	if !allowed {
+		if route.Source == "default" {
+			runtime, err := q.GetAgentRuntime(ctx, runtimeID)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return taskRuntimeSelection{}, fmt.Errorf("load default runtime: %w", err)
+			}
+			if err == nil && runtime.Visibility == "private" && runtime.OwnerID.Valid && runtime.OwnerID != agent.OwnerID {
+				return taskRuntimeSelection{}, ErrTaskRuntimeAccessDenied
+			}
+		}
 		return taskRuntimeSelection{}, fmt.Errorf("%w: check agent access and the selected runtime's sharing settings", ErrTaskRuntimeUnavailable)
 	}
 	if route.Source == "personal" {
@@ -202,6 +213,54 @@ func (s *TaskService) EffectiveRuntimeForUser(ctx context.Context, agent db.Agen
 func (s *TaskService) RuntimeForExecution(ctx context.Context, agent db.Agent, userID, sourceTaskID pgtype.UUID) (pgtype.UUID, error) {
 	selection, err := s.resolveTaskRuntime(ctx, s.Queries, agent, userID, sourceTaskID)
 	return selection.RuntimeID, err
+}
+
+// AgentForRuntimeReadiness returns a transient view after authorizing the route.
+// Personal execution owns its selected machine independently of the shared agent
+// definition. Reflect that owner for the readiness check without modifying the
+// persisted agent or weakening the ownership check for shared-default routes.
+func (s *TaskService) AgentForRuntimeReadiness(ctx context.Context, agent db.Agent, userID, sourceTaskID pgtype.UUID) (db.Agent, error) {
+	selection, err := s.resolveTaskRuntime(ctx, s.Queries, agent, userID, sourceTaskID)
+	if err != nil {
+		return db.Agent{}, err
+	}
+	return agentForRuntimeSelection(agent, selection), nil
+}
+
+func agentForRuntimeSelection(agent db.Agent, selection taskRuntimeSelection) db.Agent {
+	agent.RuntimeID = selection.RuntimeID
+	if selection.Source == "personal" {
+		agent.OwnerID = selection.RuntimeOwnerID
+	}
+	return agent
+}
+
+// Issue creation preflights the same provenance and parent route as enqueue.
+// The lookup may belong to the create transaction; use it for every read so a
+// deferred channel task sees its not-yet-committed issue and attribution.
+func issueAgentReadiness(ctx context.Context, lookup RuntimeLookup, agent db.Agent, issue db.Issue) (AgentVerdict, error) {
+	if agent.ArchivedAt.Valid {
+		return AgentReadiness(ctx, lookup, agent)
+	}
+	tasks := &TaskService{Queries: lookup.Queries}
+	attr := tasks.attributionForIssueTask(ctx, issue, pgtype.UUID{}, attribution.SourceCommentSource, pgtype.UUID{})
+	selection, err := tasks.runtimeForIssueTask(ctx, agent, issue, attr, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{})
+	if err != nil {
+		if !errors.Is(err, ErrTaskRuntimeUnavailable) {
+			return AgentVerdict{}, err
+		}
+		reason := dispatch.ReasonInvocationNotAllowed
+		switch {
+		case errors.Is(err, ErrTaskRuntimeAccessDenied):
+			reason = dispatch.ReasonRuntimeAccessDenied
+		case errors.Is(err, ErrTaskRuntimeOffline):
+			reason = dispatch.ReasonRuntimeOffline
+		case !agent.RuntimeID.Valid:
+			reason = dispatch.ReasonAgentRuntimeRequired
+		}
+		return AgentVerdict{Availability: AgentBlocked, Reason: reason, Detail: err.Error()}, nil
+	}
+	return AgentReadiness(ctx, lookup, agentForRuntimeSelection(agent, selection))
 }
 
 func (s *TaskService) runtimeForIssueTask(ctx context.Context, agent db.Agent, issue db.Issue, attr attribution.Result, actorUserID, rerunOfTaskID, triggerCommentID pgtype.UUID) (taskRuntimeSelection, error) {

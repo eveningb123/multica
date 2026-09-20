@@ -1986,10 +1986,12 @@ func (s *AutopilotService) autopilotRuntimeReadiness(ctx context.Context, ap db.
 	if !userID.Valid {
 		userID = ResolveAutopilotTriggerPrincipal(ctx, s.Queries, triggerID, ap.ID, ap.WorkspaceID)
 	}
-	runtimeID, err := s.TaskSvc.EffectiveRuntimeForUser(ctx, agent, userID)
+	readinessAgent, err := s.TaskSvc.AgentForRuntimeReadiness(ctx, agent, userID, pgtype.UUID{})
 	if err != nil {
 		reason := dispatch.ReasonInvocationNotAllowed
-		if errors.Is(err, ErrTaskRuntimeOffline) {
+		if errors.Is(err, ErrTaskRuntimeAccessDenied) {
+			reason = dispatch.ReasonRuntimeAccessDenied
+		} else if errors.Is(err, ErrTaskRuntimeOffline) {
 			reason = dispatch.ReasonRuntimeOffline
 		}
 		if errors.Is(err, ErrTaskRuntimeUnavailable) {
@@ -1997,6 +1999,5 @@ func (s *AutopilotService) autopilotRuntimeReadiness(ctx context.Context, ap db.
 		}
 		return AgentVerdict{}, err
 	}
-	agent.RuntimeID = runtimeID
-	return AgentReadiness(ctx, s.runtimeLookup(), agent)
+	return AgentReadiness(ctx, s.runtimeLookup(), readinessAgent)
 }

@@ -53,7 +53,10 @@ const (
 	reconnectRetryExpireBatchSize = 500
 	// offlineRuntimeTTLSeconds deletes offline runtimes with no active agents
 	// after this duration. 7 days gives users plenty of time to restart daemons.
-	offlineRuntimeTTLSeconds = 7 * 24 * 3600.0
+	// Shared with the delete handlers, which quote the same window when they
+	// refuse to remove a profile-backed instance the user could otherwise only
+	// wait out.
+	offlineRuntimeTTLSeconds = service.OfflineRuntimeTTLSeconds
 	// runtimeGCBatchSize bounds both the candidate scan and the number of
 	// per-runtime transactions one sweeper tick may open. At the hourly cadence,
 	// 500 preserves a theoretical capacity of 12,000 candidates per day; the

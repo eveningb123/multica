@@ -792,12 +792,15 @@ func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Req
 		return nil, sourceContextBadRequest("agent not found")
 	}
 	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(workspaceID))
-	effectiveRuntimeID, err := h.runtimeForRequest(r, agent, actorType, actorID)
+	agent, err = h.runtimeReadinessAgentForRequest(r, agent, actorType, actorID)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		if errors.Is(err, service.ErrTaskRuntimeAccessDenied) {
+			writeAgentUnavailable(w, err.Error(), ReasonRuntimeAccessDenied)
+		} else {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+		}
 		return nil, errSourceContextResponseWritten
 	}
-	agent.RuntimeID = effectiveRuntimeID
 	verdict, err := service.AgentReadiness(r.Context(), h.runtimeLookup(obsmetrics.RuntimeLookupSourceSourceContext), agent)
 	if err != nil {
 		return nil, err

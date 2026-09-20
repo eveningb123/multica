@@ -399,7 +399,7 @@
       "cancel": "Cancel",
       "deleting": "Deleting…",
       "toast_deleted": "Custom runtime deleted from workspace",
-      "error_bound": "This runtime can't be deleted while agents are still using it.",
+      "error_bound": "This custom runtime can't be deleted while agents are still using it — including agents on other machines that registered it.",
       "error_generic": "Failed to delete the runtime."
     }
   },

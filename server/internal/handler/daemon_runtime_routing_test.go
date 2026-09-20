@@ -1,12 +1,84 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+func TestFinalizeClaimDeliveryPreservesFrozenExecution(t *testing.T) {
+	for _, source := range []string{"personal", "default"} {
+		for _, mutation := range []string{"none", "default rebound", "invocation revoked", "runtime owner changed"} {
+			t.Run(source+"/"+mutation, func(t *testing.T) {
+				ctx := context.Background()
+				agentID, ownerID, defaultID, personalID := personalRuntimeFixture(t)
+				runtimeID := personalID
+				if source == "default" {
+					runtimeID = defaultID
+				}
+				runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
+				if err != nil {
+					t.Fatal(err)
+				}
+				routing, err := json.Marshal(map[string]any{"version": 1, "execution_user_id": testUserID, "routes": map[string]any{agentID: map[string]string{"runtime_id": runtimeID, "runtime_owner_id": uuidToString(runtime.OwnerID), "provider": runtime.Provider, "source": source}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				taskID := dbfx.Task(t, agentID, testutil.Cols{"runtime_id": runtimeID, "runtime_routing": routing, "status": "dispatched", "dispatched_at": testutil.Raw("now()")})
+				dbfx.Cleanup(t, `DELETE FROM task_token WHERE task_id=$1`, taskID)
+				task, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch mutation {
+				case "default rebound":
+					dbfx.Exec(t, `UPDATE agent SET runtime_id=NULL WHERE id=$1`, agentID)
+				case "invocation revoked":
+					dbfx.Exec(t, `DELETE FROM agent_invocation_target WHERE agent_id=$1`, agentID)
+				case "runtime owner changed":
+					newOwner := testUserID
+					if source == "personal" {
+						newOwner = ownerID
+					}
+					dbfx.Exec(t, `UPDATE agent_runtime SET owner_id=$1 WHERE id=$2`, newOwner, runtimeID)
+				}
+				response := AgentTaskResponse{RequestingUserName: "stale machine owner"}
+				_, failure, err := testHandler.finalizeClaimDelivery(ctx, &task, runtime, runtimeID, testWorkspaceID, &response, db.CreateTaskTokenParams{
+					ID: task.ID, TaskID: task.ID, AgentID: task.AgentID, WorkspaceID: parseUUID(testWorkspaceID),
+					UserID: runtime.OwnerID, TokenHash: taskID,
+					ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+				}, nil, false, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mutation == "invocation revoked" || mutation == "runtime owner changed" {
+					if failure == nil || !failure.settled {
+						t.Fatalf("authorization change was not settled: %+v", failure)
+					}
+					var count int
+					dbfx.QueryRow(t, `SELECT count(*) FROM task_token WHERE task_id=$1`, taskID).Scan(&count)
+					if count != 0 || response.RequestingUserName != "" {
+						t.Fatalf("rejected execution leaked token/profile: count=%d profile=%q", count, response.RequestingUserName)
+					}
+					return
+				}
+				if failure != nil {
+					t.Fatalf("valid frozen route rejected: %+v", failure)
+				}
+				var tokenUser string
+				dbfx.QueryRow(t, `SELECT user_id FROM task_token WHERE task_id=$1`, taskID).Scan(&tokenUser)
+				if tokenUser != testUserID || response.RequestingUserName != handlerTestName {
+					t.Fatalf("execution identity replaced: token=%s profile=%q", tokenUser, response.RequestingUserName)
+				}
+			})
+		}
+	}
+}
 
 func TestTaskExecutionReuseIsolation(t *testing.T) {
 	runtimeID := parseUUID("11111111-1111-1111-1111-111111111111")

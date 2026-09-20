@@ -89,6 +89,50 @@ func TestPersonalRuntimeWithoutDefaultRuntime(t *testing.T) {
 	testutil.Call(t, testHandler.SendChatMessage, req).Want(http.StatusCreated)
 }
 
+func TestIssueCreateUsesPersonalReadinessWhenDefaultAccessChanges(t *testing.T) {
+	for _, assigneeType := range []string{"agent", "squad"} {
+		for _, delegated := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/delegated=%t", assigneeType, delegated), func(t *testing.T) {
+				agentID, _, defaultID, personalID := personalRuntimeFixture(t)
+				preferenceRequest(t, agentID, testUserID, "PUT", map[string]any{"runtime_id": personalID}).Want(http.StatusOK)
+				// The shared default now violates the upstream private-owner fence;
+				// the selected personal route is still authorized and online.
+				dbfx.Exec(t, `UPDATE agent_runtime SET owner_id=$1 WHERE id=$2`, testUserID, defaultID)
+				assigneeID := agentID
+				if assigneeType == "squad" {
+					assigneeID = dbfx.Squad(t, "Personal create squad", agentID)
+				}
+				req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+					"title": "Create on personal runtime", "status": "todo", "assignee_type": assigneeType, "assignee_id": assigneeID,
+				})
+				if delegated {
+					driverID := dbfx.Agent(t, "Personal create driver", personalID)
+					routing, err := json.Marshal(service.RuntimeRouting{Version: 1, ExecutionUserID: testUserID, Routes: map[string]service.RuntimeRoute{
+						agentID:  {RuntimeID: personalID, RuntimeOwnerID: testUserID, Provider: "codex", Source: "personal"},
+						driverID: {RuntimeID: personalID, RuntimeOwnerID: testUserID, Provider: "codex", Source: "personal"},
+					}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					parentID := dbfx.Task(t, driverID, testutil.Cols{"runtime_id": personalID, "status": "running", "runtime_routing": routing, "originator_user_id": testUserID, "accountable_user_id": testUserID})
+					preferenceRequest(t, agentID, testUserID, "PUT", map[string]any{"runtime_id": nil}).Want(http.StatusOK)
+					req = asRun(req, driverID, parentID)
+				}
+				var issue IssueResponse
+				testutil.Call(t, testHandler.CreateIssue, req).Want(http.StatusCreated).JSON(&issue)
+				dbfx.Cleanup(t, `DELETE FROM issue WHERE id=$1`, issue.ID)
+				dbfx.Cleanup(t, `DELETE FROM comment WHERE issue_id=$1`, issue.ID)
+				dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id=$1`, issue.ID)
+				var runtimeID string
+				dbfx.QueryRow(t, `SELECT runtime_id FROM agent_task_queue WHERE issue_id=$1 AND agent_id=$2`, issue.ID, agentID).Scan(&runtimeID)
+				if runtimeID != personalID {
+					t.Fatalf("created issue used runtime %s, want personal %s", runtimeID, personalID)
+				}
+			})
+		}
+	}
+}
+
 // Assigning an existing issue continues the authenticated run, even when the
 // issue's creator and the user's current preference differ from that run.
 func TestAgentAssignmentInheritsFrozenRuntimeOnExistingIssue(t *testing.T) {

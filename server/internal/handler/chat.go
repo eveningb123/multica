@@ -904,17 +904,17 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	effectiveRuntimeID, err := h.runtimeForRequest(r, agent, actorType, actorID)
+	readinessAgent, err := h.runtimeReadinessAgentForRequest(r, agent, actorType, actorID)
 	if err != nil {
-		if errors.Is(err, service.ErrTaskRuntimeUnavailable) && !agent.RuntimeID.Valid {
+		if errors.Is(err, service.ErrTaskRuntimeAccessDenied) {
+			h.writeDispatchBlocked(w, http.StatusConflict, ReasonRuntimeAccessDenied)
+		} else if errors.Is(err, service.ErrTaskRuntimeUnavailable) && !agent.RuntimeID.Valid {
 			h.writeDispatchBlocked(w, http.StatusConflict, ReasonAgentRuntimeRequired)
 		} else {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 		}
 		return
 	}
-	readinessAgent := agent
-	readinessAgent.RuntimeID = effectiveRuntimeID
 	// Offline machines may queue chat; unusable machines need repair first.
 	if verdict, err := service.AgentReadiness(r.Context(), h.runtimeLookup(obsmetrics.RuntimeLookupSourceChat), readinessAgent); err == nil && verdict.Blocked() {
 		h.writeDispatchBlocked(w, http.StatusConflict, verdict.Reason)

@@ -276,28 +276,32 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 
 // runtimeForRequest only inherits execution authority from a verified task token.
 func (h *Handler) runtimeForRequest(r *http.Request, agent db.Agent, actorType, actorID string) (pgtype.UUID, error) {
+	resolved, err := h.runtimeReadinessAgentForRequest(r, agent, actorType, actorID)
+	return resolved.RuntimeID, err
+}
+
+func (h *Handler) runtimeReadinessAgentForRequest(r *http.Request, agent db.Agent, actorType, actorID string) (db.Agent, error) {
 	userID := memberActorUserID(actorType, actorID)
 	var sourceTaskID pgtype.UUID
 	if actorType == "agent" {
 		if r.Header.Get("X-Actor-Source") != "task_token" {
-			return pgtype.UUID{}, service.ErrTaskRuntimeUnavailable
+			return db.Agent{}, service.ErrTaskRuntimeUnavailable
 		}
 		task, ok := h.taskFromRequestHeader(r)
 		if !ok || uuidToString(task.AgentID) != actorID {
-			return pgtype.UUID{}, service.ErrTaskRuntimeUnavailable
+			return db.Agent{}, service.ErrTaskRuntimeUnavailable
 		}
 		sourceTaskID = task.ID
 		userID = task.OriginatorUserID
 	}
-	return h.TaskService.RuntimeForExecution(r.Context(), agent, userID, sourceTaskID)
+	return h.TaskService.AgentForRuntimeReadiness(r.Context(), agent, userID, sourceTaskID)
 }
 
 func (h *Handler) runtimeReadyForRequest(r *http.Request, agent db.Agent, actorType, actorID string) bool {
-	runtimeID, err := h.runtimeForRequest(r, agent, actorType, actorID)
+	agent, err := h.runtimeReadinessAgentForRequest(r, agent, actorType, actorID)
 	if err != nil {
 		return false
 	}
-	agent.RuntimeID = runtimeID
 	verdict, err := service.AgentReadiness(r.Context(), h.runtimeLookup(obsmetrics.RuntimeLookupSourceIssue), agent)
 	return err == nil && verdict.Ready()
 }

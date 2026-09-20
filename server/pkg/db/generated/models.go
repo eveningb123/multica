@@ -1270,6 +1270,7 @@ type RuntimeProfile struct {
 	Enabled        bool               `json:"enabled"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	RuntimeType    string             `json:"runtime_type"`
 }
 
 type SeatCapacityOutbox struct {
